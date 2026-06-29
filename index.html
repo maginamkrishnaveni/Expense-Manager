@@ -1,0 +1,127 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flat Expense Manager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header>
+    <h1>🏠 Flat Expense Manager</h1>
+    <p class="subtitle">Track contributions &amp; expenses for your flat</p>
+  </header>
+
+  <main>
+
+    <!-- MEMBERS SECTION -->
+    <section class="card" id="members-section">
+      <h2>👥 Members</h2>
+      <div id="members-list" class="members-list"></div>
+      <button class="btn btn-secondary" id="edit-members-btn">Edit Members</button>
+    </section>
+
+    <!-- SUMMARY SECTION -->
+    <section class="card" id="summary-section">
+      <h2>📊 Summary</h2>
+      <div id="summary-content"></div>
+    </section>
+
+    <!-- TABS -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="contributions">💰 Contributions</button>
+      <button class="tab-btn" data-tab="expenses">🛒 Expenses</button>
+    </div>
+
+    <!-- CONTRIBUTIONS TAB -->
+    <section class="tab-content card" id="contributions-tab">
+      <h2>Add Contribution</h2>
+      <form id="contribution-form" class="form">
+        <div class="form-group">
+          <label for="contrib-member">Member</label>
+          <select id="contrib-member" required></select>
+        </div>
+        <div class="form-group">
+          <label for="contrib-amount">Amount (₹)</label>
+          <input type="number" id="contrib-amount" placeholder="e.g. 2000" min="1" required />
+        </div>
+        <div class="form-group">
+          <label for="contrib-note">Note (optional)</label>
+          <input type="text" id="contrib-note" placeholder="e.g. June rent share" />
+        </div>
+        <div class="form-group">
+          <label for="contrib-date">Date</label>
+          <input type="date" id="contrib-date" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Add Contribution</button>
+      </form>
+
+      <h2 class="list-title">Contribution History</h2>
+      <div id="contributions-list" class="history-list"></div>
+    </section>
+
+    <!-- EXPENSES TAB -->
+    <section class="tab-content card hidden" id="expenses-tab">
+      <h2>Add Expense</h2>
+      <form id="expense-form" class="form">
+        <div class="form-group">
+          <label for="exp-paid-by">Paid By</label>
+          <select id="exp-paid-by" required></select>
+        </div>
+        <div class="form-group">
+          <label for="exp-amount">Amount (₹)</label>
+          <input type="number" id="exp-amount" placeholder="e.g. 500" min="1" required />
+        </div>
+        <div class="form-group">
+          <label for="exp-category">Category</label>
+          <select id="exp-category">
+            <option value="Groceries">🥦 Groceries</option>
+            <option value="Vegetables">🥕 Vegetables</option>
+            <option value="Household">🧹 Household</option>
+            <option value="Electricity">💡 Electricity</option>
+            <option value="Water">💧 Water</option>
+            <option value="Gas">🔥 Gas</option>
+            <option value="Rent">🏠 Rent</option>
+            <option value="Other">📦 Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="exp-desc">Description</label>
+          <input type="text" id="exp-desc" placeholder="e.g. Weekly vegetables" required />
+        </div>
+        <div class="form-group">
+          <label for="exp-date">Date</label>
+          <input type="date" id="exp-date" required />
+        </div>
+        <div class="form-group">
+          <label>Split Between</label>
+          <div id="exp-split-members" class="checkbox-group"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">Add Expense</button>
+      </form>
+
+      <h2 class="list-title">Expense History</h2>
+      <div id="expenses-list" class="history-list"></div>
+    </section>
+
+  </main>
+
+  <!-- EDIT MEMBERS MODAL -->
+  <div id="members-modal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Edit Members</h2>
+      <div id="modal-members-list"></div>
+      <div class="modal-add-row">
+        <input type="text" id="new-member-name" placeholder="New member name" />
+        <button class="btn btn-secondary" id="add-member-btn">Add</button>
+      </div>
+      <button class="btn btn-primary" id="save-members-btn">Save &amp; Close</button>
+    </div>
+  </div>
+  <div id="modal-overlay" class="modal-overlay hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

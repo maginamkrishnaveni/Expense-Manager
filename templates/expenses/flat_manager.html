@@ -1,0 +1,518 @@
+{% extends "expenses/base.html" %}
+{% block title %}Flat Manager — ExpenseIQ{% endblock %}
+
+{% block content %}
+
+<!-- Month/Year filter -->
+<form method="GET" class="d-flex align-items-center gap-2 mb-4 flex-wrap">
+  <select name="month" class="form-select form-select-sm w-auto">
+    {% for num, name in months %}
+    <option value="{{ num }}" {% if sel_month == num %}selected{% endif %}>{{ name }}</option>
+    {% endfor %}
+  </select>
+  <select name="year" class="form-select form-select-sm w-auto">
+    {% for y in years %}
+    <option value="{{ y }}" {% if sel_year == y %}selected{% endif %}>{{ y }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-accent btn-sm">View</button>
+  <span class="ms-2 text-muted fw-semibold">{{ sel_month_name }} {{ sel_year }}</span>
+</form>
+
+<!-- ── KPI Summary ──────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="kpi-card">
+      <div class="kpi-icon bg-success-soft"><i class="bi bi-cash-stack"></i></div>
+      <div>
+        <div class="kpi-label">Total Collected</div>
+        <div class="kpi-value">₹{{ total_collected|floatformat:0 }}</div>
+        <div class="kpi-label">of ₹{{ monthly_share|floatformat:0 }} × 3</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="kpi-card">
+      <div class="kpi-icon bg-primary-soft"><i class="bi bi-basket"></i></div>
+      <div>
+        <div class="kpi-label">Pool Spent</div>
+        <div class="kpi-value">₹{{ pool_expenses|floatformat:0 }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="kpi-card">
+      <div class="kpi-icon {% if pool_balance >= 0 %}bg-success-soft{% else %}bg-danger-soft{% endif %}">
+        <i class="bi bi-wallet2"></i>
+      </div>
+      <div>
+        <div class="kpi-label">Pool Balance</div>
+        <div class="kpi-value {% if pool_balance < 0 %}text-danger{% endif %}">
+          ₹{{ pool_balance|floatformat:0 }}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="kpi-card">
+      <div class="kpi-icon bg-warning-soft"><i class="bi bi-exclamation-circle"></i></div>
+      <div>
+        <div class="kpi-label">Pending Dues</div>
+        <div class="kpi-value {% if total_pending > 0 %}text-danger{% endif %}">
+          ₹{{ total_pending|floatformat:0 }}
+        </div>
+        <div class="kpi-label">{{ pending_count }} item(s)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if pocket_expenses > 0 %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-4 py-2">
+  <i class="bi bi-wallet-fill fs-5"></i>
+  <span>You paid <strong>₹{{ pocket_expenses|floatformat:2 }}</strong> from your own pocket this month — not from the shared pool.</span>
+</div>
+{% endif %}
+
+<!-- ── Member Cards ─────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+  {% for m in member_summary %}
+  <div class="col-md-4">
+    <div class="card-box h-100">
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <div class="member-avatar" style="background:{{ m.color }}">{{ m.name|slice:":1" }}</div>
+        <div>
+          <div class="fw-bold">{{ m.name }}</div>
+          <div class="small text-muted">{{ m.role|title }}</div>
+        </div>
+      </div>
+      <div class="member-stat-row">
+        <span class="text-muted small">Contributed</span>
+        <span class="fw-semibold {% if m.contributed == 0 %}text-danger{% else %}text-success{% endif %}">
+          ₹{{ m.contributed|floatformat:0 }}
+        </span>
+      </div>
+      <div class="member-stat-row">
+        <span class="text-muted small">Share Due</span>
+        <span class="fw-semibold">₹{{ m.share_due|floatformat:0 }}</span>
+      </div>
+      <div class="member-stat-row">
+        <span class="text-muted small">Contribution Balance</span>
+        <span class="fw-semibold {% if m.balance < 0 %}text-danger{% elif m.balance > 0 %}text-success{% endif %}">
+          {% if m.balance >= 0 %}+{% endif %}₹{{ m.balance|floatformat:0 }}
+        </span>
+      </div>
+      {% if m.role != 'admin' %}
+      <div class="member-stat-row">
+        <span class="text-muted small">They Spent (unsettled)</span>
+        <span class="fw-semibold text-warning">₹{{ m.pending_owed|floatformat:0 }}</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── Action Buttons ──────────────────────────────────────── -->
+<div class="d-flex gap-2 flex-wrap mb-4">
+  <button class="btn btn-accent btn-sm" data-bs-toggle="modal" data-bs-target="#contribModal">
+    <i class="bi bi-plus-circle me-1"></i>Record Contribution
+  </button>
+  <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#sharedExpModal">
+    <i class="bi bi-basket me-1"></i>Add Shared Expense
+  </button>
+  <button class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#settlementModal">
+    <i class="bi bi-arrow-left-right me-1"></i>Flatmate Paid Outside
+  </button>
+  <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#settingsModal">
+    <i class="bi bi-gear me-1"></i>Settings
+  </button>
+</div>
+
+<!-- ── Pending Reimbursement Requests (from flatmates) ──── -->
+{% if pending_requests %}
+<div class="card-box mb-4" style="border-left: 4px solid #f59e0b;">
+  <h6 class="section-title text-warning mb-3">
+    <i class="bi bi-bell me-2"></i>Reimbursement Requests — Needs Your Review
+    <span class="badge bg-warning text-dark ms-2">{{ request_count }}</span>
+  </h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr><th>Date</th><th>From</th><th>What For</th><th class="text-end">Amount</th><th>Note</th><th class="text-center" style="min-width:200px">Action</th></tr>
+      </thead>
+      <tbody>
+        {% for r in pending_requests %}
+        <tr class="table-warning">
+          <td class="small text-muted">{{ r.date }}</td>
+          <td><span class="badge-cat">{{ r.requested_by }}</span></td>
+          <td class="fw-semibold">{{ r.description }}</td>
+          <td class="text-end fw-bold text-accent">₹{{ r.amount|floatformat:2 }}</td>
+          <td class="small text-muted">{{ r.note|default:"—" }}</td>
+          <td>
+            <form method="POST" action="{% url 'review_request' r.id %}" class="d-flex gap-1 align-items-center">
+              {% csrf_token %}
+              <input type="hidden" name="month" value="{{ sel_month }}">
+              <input type="hidden" name="year"  value="{{ sel_year }}">
+              <input type="text" name="admin_note" class="form-control form-control-sm"
+                     placeholder="Note (optional)" style="max-width:120px"/>
+              <button name="action" value="approve" class="btn btn-sm btn-success" title="Approve">
+                <i class="bi bi-check-lg"></i>
+              </button>
+              <button name="action" value="reject" class="btn btn-sm btn-danger" title="Reject">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Pending Settlements ─────────────────────────────────── -->
+{% if pending_settlements %}
+<div class="card-box mb-4 border-warning">
+  <h6 class="section-title text-warning mb-3">
+    <i class="bi bi-exclamation-triangle me-2"></i>Pending — You Owe Them
+  </h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Date</th><th>Who Paid</th><th>What For</th>
+          <th class="text-end">Amount</th><th>Note</th><th class="text-center">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in pending_settlements %}
+        <tr class="table-warning">
+          <td class="small text-muted">{{ s.date }}</td>
+          <td><span class="badge-cat">{{ s.paid_by }}</span></td>
+          <td class="fw-semibold">{{ s.description }}</td>
+          <td class="text-end fw-bold text-danger">₹{{ s.amount|floatformat:2 }}</td>
+          <td class="small text-muted">{{ s.note|default:"—" }}</td>
+          <td class="text-center">
+            <form method="POST" action="{% url 'mark_settled' s.id %}" class="d-inline">
+              {% csrf_token %}
+              <input type="hidden" name="month" value="{{ sel_month }}">
+              <input type="hidden" name="year"  value="{{ sel_year }}">
+              <button class="btn btn-sm btn-success" title="Mark as paid">
+                <i class="bi bi-check-lg"></i>
+              </button>
+            </form>
+            <form method="POST" action="{% url 'delete_settlement' s.id %}" class="d-inline ms-1">
+              {% csrf_token %}
+              <button class="btn btn-sm btn-outline-danger" title="Delete">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Shared Expenses Table ───────────────────────────────── -->
+<div class="card-box mb-4">
+  <h6 class="section-title mb-3"><i class="bi bi-list-ul me-2"></i>Shared Expenses — {{ sel_month_name }} {{ sel_year }}</h6>
+  {% if shared_expenses %}
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Date</th><th>Title</th><th>Category</th><th>Paid By</th>
+          <th>Source</th><th class="text-end">Amount</th><th>Note</th><th class="text-center">Del</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in shared_expenses %}
+        <tr>
+          <td class="small text-muted">{{ e.date }}</td>
+          <td class="fw-semibold">{{ e.title }}</td>
+          <td><span class="badge-cat">{{ e.category }}</span></td>
+          <td>{{ e.paid_by }}</td>
+          <td>
+            {% if e.from_pool %}
+            <span class="badge bg-success-soft text-success small">Pool</span>
+            {% else %}
+            <span class="badge bg-danger-soft text-danger small">My Pocket</span>
+            {% endif %}
+          </td>
+          <td class="text-end fw-bold text-accent">₹{{ e.amount|floatformat:2 }}</td>
+          <td class="small text-muted">{{ e.note|default:"—" }}</td>
+          <td class="text-center">
+            <form method="POST" action="{% url 'delete_shared_expense' e.id %}" class="d-inline">
+              {% csrf_token %}
+              <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot class="table-light fw-bold">
+        <tr>
+          <td colspan="5" class="text-end">Total</td>
+          <td class="text-end text-accent">₹{{ total_shared|floatformat:2 }}</td>
+          <td colspan="2"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-center py-4 text-muted">
+    <i class="bi bi-inbox display-5 d-block mb-2"></i>No shared expenses recorded yet.
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── Settled history ─────────────────────────────────────── -->
+{% if settled_settlements %}
+<div class="card-box mb-4">
+  <h6 class="section-title text-success mb-3">
+    <i class="bi bi-check-circle me-2"></i>Settled Payments — {{ sel_month_name }}
+  </h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr><th>Date</th><th>Who</th><th>What For</th><th class="text-end">Amount</th><th>Settled On</th></tr>
+      </thead>
+      <tbody>
+        {% for s in settled_settlements %}
+        <tr>
+          <td class="small text-muted">{{ s.date }}</td>
+          <td><span class="badge-cat">{{ s.paid_by }}</span></td>
+          <td>{{ s.description }}</td>
+          <td class="text-end text-success fw-bold">₹{{ s.amount|floatformat:2 }}</td>
+          <td class="small text-muted">{{ s.settled_on|default:"—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+
+<!-- ════════════════════════════════════════════
+     MODALS
+═════════════════════════════════════════════ -->
+
+<!-- Record Contribution Modal -->
+<div class="modal fade" id="contribModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-cash me-2 text-accent"></i>Record Contribution</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" action="{% url 'add_contribution' %}">
+        {% csrf_token %}
+        <input type="hidden" name="month" value="{{ sel_month }}">
+        <input type="hidden" name="year"  value="{{ sel_year }}">
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Member *</label>
+            <select name="member" class="form-select" required>
+              {% for m in members %}
+              <option value="{{ m.name }}">{{ m.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Amount (₹) *</label>
+            <input type="number" name="amount" class="form-control"
+                   value="{{ monthly_share }}" step="0.01" min="1" required/>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Note (optional)</label>
+            <input type="text" name="note" class="form-control" placeholder="e.g. June share"/>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-accent">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Add Shared Expense Modal -->
+<div class="modal fade" id="sharedExpModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-basket me-2 text-accent"></i>Add Shared Expense</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" action="{% url 'add_shared_expense' %}">
+        {% csrf_token %}
+        <input type="hidden" name="month" value="{{ sel_month }}">
+        <input type="hidden" name="year"  value="{{ sel_year }}">
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Title *</label>
+            <input type="text" name="title" class="form-control" placeholder="e.g. Monthly Rent" required/>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-6">
+              <label class="form-label">Amount (₹) *</label>
+              <input type="number" name="amount" class="form-control" step="0.01" min="0" required/>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Date *</label>
+              <input type="date" name="date" class="form-control" id="sharedDate" required/>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Category *</label>
+            <select name="category" class="form-select" required>
+              {% for cat in categories %}
+              <option value="{{ cat }}">{{ cat }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Paid By</label>
+            <select name="paid_by" class="form-select">
+              {% for m in members %}
+              <option value="{{ m.name }}">{{ m.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Payment Source *</label>
+            <select name="from_pool" class="form-select">
+              <option value="true">Shared Pool (monthly contributions)</option>
+              <option value="false">My Personal Pocket</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Note (optional)</label>
+            <textarea name="note" class="form-control" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-accent">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Flatmate Paid Outside (Settlement) Modal -->
+<div class="modal fade" id="settlementModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-arrow-left-right me-2 text-warning"></i>Flatmate Paid Outside</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" action="{% url 'add_settlement' %}">
+        {% csrf_token %}
+        <input type="hidden" name="month" value="{{ sel_month }}">
+        <input type="hidden" name="year"  value="{{ sel_year }}">
+        <div class="modal-body">
+          <div class="alert alert-info py-2 small mb-3">
+            Use this when a flatmate bought something with their own money while you were away. You'll owe them this amount.
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Who Paid? *</label>
+            <select name="paid_by" class="form-select" required>
+              {% for m in members %}
+              {% if m.role != 'admin' %}
+              <option value="{{ m.name }}">{{ m.name }}</option>
+              {% endif %}
+              {% endfor %}
+            </select>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-6">
+              <label class="form-label">Amount (₹) *</label>
+              <input type="number" name="amount" class="form-control" step="0.01" min="0" required/>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Date *</label>
+              <input type="date" name="date" class="form-control" id="settlementDate" required/>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">What did they buy? *</label>
+            <input type="text" name="description" class="form-control"
+                   placeholder="e.g. Vegetables, Milk, Eggs" required/>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Note (optional)</label>
+            <textarea name="note" class="form-control" rows="2"
+                      placeholder="Any extra details..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-warning text-dark fw-bold">Record</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal fade" id="settingsModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-gear me-2"></i>Settings</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+
+        <!-- Monthly share -->
+        <form method="POST" action="{% url 'update_monthly_share' %}" class="mb-4">
+          {% csrf_token %}
+          <label class="form-label fw-semibold">Monthly Share per Person (₹)</label>
+          <div class="input-group">
+            <span class="input-group-text">₹</span>
+            <input type="number" name="monthly_share" class="form-control"
+                   value="{{ monthly_share }}" min="1" step="100" required/>
+            <button type="submit" class="btn btn-accent">Update</button>
+          </div>
+        </form>
+
+        <hr/>
+
+        <!-- Rename members -->
+        <p class="fw-semibold mb-3">Rename Members</p>
+        {% for m in members %}
+        <form method="POST" action="{% url 'update_member' m.id %}" class="mb-2">
+          {% csrf_token %}
+          <div class="input-group input-group-sm">
+            <span class="input-group-text" style="background:{{ m.color }};color:#fff;width:36px">
+              {{ m.name|slice:":1" }}
+            </span>
+            <input type="text" name="name" class="form-control"
+                   value="{{ m.name }}" required/>
+            <button type="submit" class="btn btn-outline-primary">Save</button>
+          </div>
+        </form>
+        {% endfor %}
+
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.getElementById('sharedDate').valueAsDate    = new Date();
+  document.getElementById('settlementDate').valueAsDate = new Date();
+</script>
+{% endblock %}
