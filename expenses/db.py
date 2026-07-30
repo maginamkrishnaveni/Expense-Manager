@@ -1,13 +1,3 @@
-from pymongo import MongoClient
-from django.conf import settings
-
-_client = None
-
-def get_db():
-    global _client
-    if _client is None:
-        _client = MongoClient(settings.MONGO_URI)
-    return _client[settings.MONGO_DB_NAME]
-
-def get_collection(name):
-    return get_db()[name]
+# This file is kept for compatibility but is no longer used.
+# The project now uses Django ORM with SQLite instead of MongoDB.
+# All database access goes through models.py (Django models).

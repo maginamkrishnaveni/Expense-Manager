@@ -8,16 +8,14 @@ class ExpensesConfig(AppConfig):
     def ready(self):
         """
         Called once when Django finishes loading the app registry.
-        Initializes all MongoDB collections, indexes, and seed data.
+        Seeds default data into SQLite if tables are empty.
         """
-        # Guard against double-execution during Django's auto-reloader
         import os
         if os.environ.get('RUN_MAIN') != 'true':
             return
 
         try:
-            from .models import initialize_collections
-            initialize_collections()
+            from .seed import seed_default_data
+            seed_default_data()
         except Exception as e:
-            print(f"[ExpenseIQ] ⚠️  Could not initialize collections: {e}")
-            print("[ExpenseIQ] Make sure MongoDB is running on the configured URI.")
+            print(f"[ExpenseIQ] Warning during seed: {e}")

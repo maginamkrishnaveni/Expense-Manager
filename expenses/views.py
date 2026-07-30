@@ -1,70 +1,62 @@
 import json
 from datetime import datetime, date
-from bson import ObjectId
 from django.shortcuts import render, redirect
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
+from django.utils import timezone
 
-from .db import get_collection
-from .auth import authenticate, get_logged_in_user, login_required, admin_required
 from .models import (
-    expense_schema, shared_expense_schema,
-    contribution_schema, settlement_schema,
-    reimbursement_request_schema,
-    COLLECTION_EXPENSES, COLLECTION_CATEGORIES,
-    COLLECTION_MEMBERS, COLLECTION_CONTRIBUTIONS,
-    COLLECTION_SHARED_EXP, COLLECTION_SETTLEMENTS,
-    COLLECTION_SETTINGS, COLLECTION_REQUESTS,
+    Expense, Category, Member, Contribution,
+    SharedExpense, Settlement, ReimbursementRequest, AppSettings,
 )
+from .auth import authenticate, get_logged_in_user, login_required, admin_required
 
-MONTH_NAMES   = ['', 'January', 'February', 'March', 'April', 'May', 'June',
-                 'July', 'August', 'September', 'October', 'November', 'December']
+MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+               'July', 'August', 'September', 'October', 'November', 'December']
 MONTH_CHOICES = [(i, MONTH_NAMES[i]) for i in range(1, 13)]
 
 
 # ── helpers ────────────────────────────────────────────────────
-def _serialize(doc):
-    doc['id'] = str(doc.pop('_id'))
-    for field in ('date', 'settled_on', 'reviewed_on', 'paid_on'):
-        if isinstance(doc.get(field), datetime):
-            doc[field] = doc[field].strftime('%Y-%m-%d')
-    return doc
+
+def _serialize_expense(e):
+    return {
+        'id':         e.id,
+        'title':      e.title,
+        'amount':     e.amount,
+        'category':   e.category,
+        'date':       e.date.strftime('%Y-%m-%d'),
+        'note':       e.note,
+        'created_at': e.created_at.strftime('%Y-%m-%d'),
+    }
 
 
 def _get_categories():
-    col  = get_collection(COLLECTION_CATEGORIES)
-    cats = list(col.find({}, {'name': 1, '_id': 0}).sort('name', 1))
-    return [c['name'] for c in cats] if cats else ['Other']
+    cats = list(Category.objects.values_list('name', flat=True).order_by('name'))
+    return cats if cats else ['Other']
 
 
 def _get_members():
-    col     = get_collection(COLLECTION_MEMBERS)
-    members = list(col.find({'active': True}).sort('name', 1))
-    for m in members:
-        m['id'] = str(m.pop('_id'))
-    return members
+    return list(Member.objects.filter(active=True).order_by('name'))
 
 
 def _get_monthly_share():
-    col = get_collection(COLLECTION_SETTINGS)
-    s   = col.find_one({'key': 'app_settings'})
-    return s.get('monthly_share', 8000) if s else 8000
+    settings = AppSettings.objects.first()
+    return settings.monthly_share if settings else 8000
 
 
 def _pool_summary(month, year):
     """Return pool KPIs for a given month/year."""
-    monthly_share  = _get_monthly_share()
-    contribs       = list(get_collection(COLLECTION_CONTRIBUTIONS).find(
-        {'month': month, 'year': year}
-    ))
-    total_collected = sum(c['amount'] for c in contribs)
-    contrib_map     = {c['member']: c['amount'] for c in contribs}
+    monthly_share = _get_monthly_share()
 
-    shared = list(get_collection(COLLECTION_SHARED_EXP).find(
-        {'month': month, 'year': year}
-    ))
-    pool_spent   = sum(e['amount'] for e in shared if e.get('from_pool'))
-    pocket_spent = sum(e['amount'] for e in shared if not e.get('from_pool'))
+    contribs = Contribution.objects.filter(month=month, year=year)
+    total_collected = sum(c.amount for c in contribs)
+    contrib_map = {c.member: c.amount for c in contribs}
+
+    shared = SharedExpense.objects.filter(
+        date__month=month, date__year=year
+    )
+    pool_spent   = sum(e.amount for e in shared if e.from_pool)
+    pocket_spent = sum(e.amount for e in shared if not e.from_pool)
     pool_balance = total_collected - pool_spent
 
     return {
@@ -80,6 +72,7 @@ def _pool_summary(month, year):
 # ══════════════════════════════════════════════════════════════
 #  AUTH VIEWS
 # ══════════════════════════════════════════════════════════════
+
 def login_view(request):
     if get_logged_in_user(request):
         user = get_logged_in_user(request)
@@ -91,11 +84,11 @@ def login_view(request):
         password = request.POST.get('password', '')
         member   = authenticate(username, password)
         if member:
-            request.session['user_id']   = str(member['_id'])
-            request.session['user_name'] = member['name']
-            request.session['user_role'] = member['role']
-            request.session['user_color'] = member.get('color', '#6366f1')
-            if member['role'] == 'admin':
+            request.session['user_id']    = member.id
+            request.session['user_name']  = member.name
+            request.session['user_role']  = member.role
+            request.session['user_color'] = member.color
+            if member.role == 'admin':
                 return redirect('dashboard')
             return redirect('member_dashboard')
         error = 'Invalid username or password.'
@@ -109,8 +102,9 @@ def logout_view(request):
 
 
 # ══════════════════════════════════════════════════════════════
-#  MEMBER DASHBOARD  (flatmates view)
+#  MEMBER DASHBOARD
 # ══════════════════════════════════════════════════════════════
+
 @login_required
 def member_dashboard(request):
     user  = get_logged_in_user(request)
@@ -119,31 +113,26 @@ def member_dashboard(request):
     sel_month = int(request.GET.get('month', today.month))
     sel_year  = int(request.GET.get('year',  today.year))
 
-    pool = _pool_summary(sel_month, sel_year)
-
-    # This member's contribution
+    pool            = _pool_summary(sel_month, sel_year)
     my_contribution = pool['contrib_map'].get(user['name'], 0)
     my_balance      = my_contribution - pool['monthly_share']
 
-    # Shared expenses list (read-only for members)
-    shared_expenses = list(get_collection(COLLECTION_SHARED_EXP).find(
-        {'month': sel_month, 'year': sel_year}
-    ).sort('date', -1))
+    shared_expenses = list(
+        SharedExpense.objects.filter(
+            date__month=sel_month, date__year=sel_year
+        ).order_by('-date').values()
+    )
     for e in shared_expenses:
-        e['id'] = str(e.pop('_id'))
-        if isinstance(e.get('date'), datetime):
-            e['date'] = e['date'].strftime('%Y-%m-%d')
+        e['date'] = e['date'].strftime('%Y-%m-%d') if e.get('date') else ''
 
-    # This member's reimbursement requests
-    my_requests = list(get_collection(COLLECTION_REQUESTS).find(
-        {'requested_by': user['name'], 'month': sel_month, 'year': sel_year}
-    ).sort('created_at', -1))
+    my_requests = list(
+        ReimbursementRequest.objects.filter(
+            requested_by=user['name'], month=sel_month, year=sel_year
+        ).order_by('-created_at').values()
+    )
     for r in my_requests:
-        r['id'] = str(r.pop('_id'))
-        if isinstance(r.get('date'), datetime):
-            r['date'] = r['date'].strftime('%Y-%m-%d')
+        r['date'] = r['date'].strftime('%Y-%m-%d') if r.get('date') else ''
 
-    # Available years
     years = sorted({today.year, sel_year}, reverse=True)
 
     context = {
@@ -166,21 +155,23 @@ def member_dashboard(request):
 # ══════════════════════════════════════════════════════════════
 #  REIMBURSEMENT REQUESTS
 # ══════════════════════════════════════════════════════════════
+
 @login_required
 @require_POST
 def submit_request(request):
     user = get_logged_in_user(request)
     try:
         amount   = float(request.POST.get('amount', 0))
-        req_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d')
-        doc = reimbursement_request_schema(
+        req_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d').date()
+        ReimbursementRequest.objects.create(
             requested_by = user['name'],
-            amount       = amount,
-            description  = request.POST.get('description', ''),
-            date_obj     = req_date,
-            note         = request.POST.get('note', ''),
+            amount       = round(amount, 2),
+            description  = request.POST.get('description', '').strip(),
+            date         = req_date,
+            month        = req_date.month,
+            year         = req_date.year,
+            note         = request.POST.get('note', '').strip(),
         )
-        get_collection(COLLECTION_REQUESTS).insert_one(doc)
     except Exception:
         pass
     m = request.POST.get('month', date.today().month)
@@ -191,8 +182,7 @@ def submit_request(request):
 @admin_required
 @require_POST
 def review_request(request, request_id):
-    """Admin approves or rejects a reimbursement request."""
-    action     = request.POST.get('action')   # 'approve' or 'reject'
+    action     = request.POST.get('action')
     admin_note = request.POST.get('admin_note', '').strip()
     m = request.POST.get('month', date.today().month)
     y = request.POST.get('year',  date.today().year)
@@ -200,33 +190,26 @@ def review_request(request, request_id):
     if action not in ('approve', 'reject'):
         return redirect(f'/flat/?month={m}&year={y}')
 
-    status = 'approved' if action == 'approve' else 'rejected'
-    get_collection(COLLECTION_REQUESTS).update_one(
-        {'_id': ObjectId(request_id)},
-        {'$set': {
-            'status':      status,
-            'admin_note':  admin_note,
-            'reviewed_on': datetime.utcnow(),
-        }}
-    )
+    try:
+        req_obj = ReimbursementRequest.objects.get(pk=request_id)
+        req_obj.status      = 'approved' if action == 'approve' else 'rejected'
+        req_obj.admin_note  = admin_note
+        req_obj.reviewed_on = timezone.now()
+        req_obj.save()
 
-    # If approved → auto-create a settlement record so it shows in pending dues
-    if status == 'approved':
-        req_doc = get_collection(COLLECTION_REQUESTS).find_one(
-            {'_id': ObjectId(request_id)}
-        )
-        if req_doc:
-            doc = settlement_schema(
-                paid_by     = req_doc['requested_by'],
-                amount      = req_doc['amount'],
-                description = req_doc['description'],
-                date_obj    = req_doc['date'],
-                note        = f"Auto from approved request: {req_doc.get('note', '')}",
+        # Auto-create settlement when approved
+        if req_obj.status == 'approved':
+            Settlement.objects.create(
+                paid_by     = req_obj.requested_by,
+                amount      = req_obj.amount,
+                description = req_obj.description,
+                date        = req_obj.date,
+                month       = req_obj.month,
+                year        = req_obj.year,
+                note        = f'Auto from approved request: {req_obj.note}',
             )
-            # carry month/year from the original request
-            doc['month'] = req_doc['month']
-            doc['year']  = req_doc['year']
-            get_collection(COLLECTION_SETTLEMENTS).insert_one(doc)
+    except ReimbursementRequest.DoesNotExist:
+        pass
 
     return redirect(f'/flat/?month={m}&year={y}')
 
@@ -234,9 +217,9 @@ def review_request(request, request_id):
 # ══════════════════════════════════════════════════════════════
 #  ADMIN — PERSONAL DASHBOARD
 # ══════════════════════════════════════════════════════════════
+
 @admin_required
 def dashboard(request):
-    col        = get_collection(COLLECTION_EXPENSES)
     categories = _get_categories()
     today      = date.today()
 
@@ -244,49 +227,49 @@ def dashboard(request):
     sel_category = request.GET.get('category', '')
     sel_year     = request.GET.get('year', str(today.year))
 
-    query = {}
+    qs = Expense.objects.all()
     if sel_month:
-        query['month'] = int(sel_month)
-        query['year']  = int(sel_year)
+        qs = qs.filter(date__month=int(sel_month), date__year=int(sel_year))
     elif sel_year:
-        query['year'] = int(sel_year)
+        qs = qs.filter(date__year=int(sel_year))
     if sel_category:
-        query['category'] = sel_category
+        qs = qs.filter(category=sel_category)
 
-    expenses = list(col.find(query).sort('date', -1))
-    for e in expenses:
-        _serialize(e)
+    expenses = list(qs.order_by('-date'))
 
-    total        = sum(e['amount'] for e in expenses)
-    all_expenses = list(col.find())
-    grand_total  = sum(e['amount'] for e in all_expenses)
+    total        = sum(e.amount for e in expenses)
+    all_expenses = list(Expense.objects.all())
+    grand_total  = sum(e.amount for e in all_expenses)
 
     cur_month_total = sum(
-        e['amount'] for e in all_expenses
-        if e.get('month') == today.month and e.get('year') == today.year
+        e.amount for e in all_expenses
+        if e.date.month == today.month and e.date.year == today.year
     )
+
     cat_data = {}
     for e in all_expenses:
-        c = e.get('category', 'Other')
-        cat_data[c] = cat_data.get(c, 0) + e['amount']
+        cat_data[e.category] = cat_data.get(e.category, 0) + e.amount
 
     month_data = {m: 0 for m in range(1, 13)}
     for e in all_expenses:
-        if e.get('year') == today.year:
-            month_data[e.get('month', 1)] += e['amount']
+        if e.date.year == today.year:
+            month_data[e.date.month] += e.amount
 
     month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     month_values = [round(month_data[m], 2) for m in range(1, 13)]
     top_category = max(cat_data, key=cat_data.get) if cat_data else '—'
 
-    years = sorted(set(e.get('year', today.year) for e in all_expenses), reverse=True)
+    years = sorted(
+        set(Expense.objects.values_list('date__year', flat=True)),
+        reverse=True
+    )
     if today.year not in years:
-        years.insert(0, today.year)
+        years = [today.year] + list(years)
 
     context = {
         'user':            get_logged_in_user(request),
-        'expenses':        expenses,
+        'expenses':        [_serialize_expense(e) for e in expenses],
         'categories':      categories,
         'total':           round(total, 2),
         'grand_total':     round(grand_total, 2),
@@ -309,21 +292,22 @@ def dashboard(request):
 # ══════════════════════════════════════════════════════════════
 #  PERSONAL EXPENSE CRUD
 # ══════════════════════════════════════════════════════════════
+
 @admin_required
 @require_POST
 def add_expense(request):
-    col = get_collection(COLLECTION_EXPENSES)
     try:
         amount   = float(request.POST.get('amount', 0))
-        exp_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d')
-        doc = expense_schema(
-            title    = request.POST.get('title', ''),
-            amount   = amount,
-            category = request.POST.get('category', 'Other'),
-            date_obj = exp_date,
-            note     = request.POST.get('note', ''),
-        )
-        col.insert_one(doc)
+        exp_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d').date()
+        title    = request.POST.get('title', '').strip()
+        if title and amount > 0:
+            Expense.objects.create(
+                title    = title,
+                amount   = round(amount, 2),
+                category = request.POST.get('category', 'Other'),
+                date     = exp_date,
+                note     = request.POST.get('note', '').strip(),
+            )
     except Exception:
         pass
     return redirect('dashboard')
@@ -331,34 +315,26 @@ def add_expense(request):
 
 @admin_required
 def get_expense(request, expense_id):
-    col = get_collection(COLLECTION_EXPENSES)
-    doc = col.find_one({'_id': ObjectId(expense_id)})
-    if doc:
-        return JsonResponse(_serialize(doc))
-    return JsonResponse({'error': 'Not found'}, status=404)
+    try:
+        e = Expense.objects.get(pk=expense_id)
+        return JsonResponse(_serialize_expense(e))
+    except Expense.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
 
 
 @admin_required
 @require_POST
 def edit_expense(request, expense_id):
-    col = get_collection(COLLECTION_EXPENSES)
     try:
+        e        = Expense.objects.get(pk=expense_id)
         amount   = float(request.POST.get('amount', 0))
-        exp_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d')
-        col.update_one(
-            {'_id': ObjectId(expense_id)},
-            {'$set': {
-                'title':      request.POST.get('title', '').strip(),
-                'amount':     round(amount, 2),
-                'category':   request.POST.get('category', 'Other'),
-                'date':       exp_date,
-                'day':        exp_date.day,
-                'month':      exp_date.month,
-                'year':       exp_date.year,
-                'note':       request.POST.get('note', '').strip(),
-                'updated_at': datetime.utcnow(),
-            }}
-        )
+        exp_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d').date()
+        e.title    = request.POST.get('title', '').strip()
+        e.amount   = round(amount, 2)
+        e.category = request.POST.get('category', 'Other')
+        e.date     = exp_date
+        e.note     = request.POST.get('note', '').strip()
+        e.save()
     except Exception:
         pass
     return redirect('dashboard')
@@ -367,46 +343,46 @@ def edit_expense(request, expense_id):
 @admin_required
 @require_POST
 def delete_expense(request, expense_id):
-    get_collection(COLLECTION_EXPENSES).delete_one({'_id': ObjectId(expense_id)})
+    Expense.objects.filter(pk=expense_id).delete()
     return redirect('dashboard')
 
 
 # ══════════════════════════════════════════════════════════════
 #  ANALYTICS
 # ══════════════════════════════════════════════════════════════
+
 @admin_required
 def analytics(request):
-    col          = get_collection(COLLECTION_EXPENSES)
     categories   = _get_categories()
     today        = date.today()
-    all_expenses = list(col.find())
+    all_expenses = list(Expense.objects.all())
 
     yearly = {}
     for e in all_expenses:
-        y = e.get('year', today.year)
-        yearly[y] = yearly.get(y, 0) + e['amount']
+        y = e.date.year
+        yearly[y] = yearly.get(y, 0) + e.amount
     yearly_sorted = sorted(yearly.items())
 
     cat_month = {c: [0] * 12 for c in categories}
     for e in all_expenses:
-        if e.get('year') == today.year:
-            m = e.get('month', 1) - 1
-            c = e.get('category', 'Other')
+        if e.date.year == today.year:
+            m = e.date.month - 1
+            c = e.category
             if c in cat_month:
-                cat_month[c][m] += e['amount']
+                cat_month[c][m] += e.amount
 
     daily = {}
     for e in all_expenses:
-        if e.get('month') == today.month and e.get('year') == today.year:
-            d = e.get('day', 1)
-            daily[d] = daily.get(d, 0) + e['amount']
+        if e.date.month == today.month and e.date.year == today.year:
+            d = e.date.day
+            daily[d] = daily.get(d, 0) + e.amount
     daily_labels = sorted(daily.keys())
     daily_values = [round(daily[d], 2) for d in daily_labels]
 
     monthly_totals = {}
     for e in all_expenses:
-        key = f"{e.get('year')}-{e.get('month')}"
-        monthly_totals[key] = monthly_totals.get(key, 0) + e['amount']
+        key = f'{e.date.year}-{e.date.month}'
+        monthly_totals[key] = monthly_totals.get(key, 0) + e.amount
     avg_monthly = round(
         sum(monthly_totals.values()) / len(monthly_totals), 2
     ) if monthly_totals else 0
@@ -434,7 +410,7 @@ def analytics(request):
         'daily_values':     json.dumps(daily_values),
         'avg_monthly':      avg_monthly,
         'total_expenses':   len(all_expenses),
-        'grand_total':      round(sum(e['amount'] for e in all_expenses), 2),
+        'grand_total':      round(sum(e.amount for e in all_expenses), 2),
         'categories':       categories,
     }
     return render(request, 'expenses/analytics.html', context)
@@ -443,93 +419,88 @@ def analytics(request):
 # ══════════════════════════════════════════════════════════════
 #  FLAT MANAGER  (admin only)
 # ══════════════════════════════════════════════════════════════
+
 @admin_required
 def flat_manager(request):
-    today        = date.today()
-    sel_month    = int(request.GET.get('month', today.month))
-    sel_year     = int(request.GET.get('year',  today.year))
+    today     = date.today()
+    sel_month = int(request.GET.get('month', today.month))
+    sel_year  = int(request.GET.get('year',  today.year))
+
     pool         = _pool_summary(sel_month, sel_year)
     members      = _get_members()
-    member_names = [m['name'] for m in members]
+    member_names = [m.name for m in members]
     categories   = _get_categories()
 
-    shared_expenses = list(get_collection(COLLECTION_SHARED_EXP).find(
-        {'month': sel_month, 'year': sel_year}
-    ).sort('date', -1))
+    shared_expenses = list(
+        SharedExpense.objects.filter(
+            date__month=sel_month, date__year=sel_year
+        ).order_by('-date').values()
+    )
     for e in shared_expenses:
-        e['id'] = str(e.pop('_id'))
-        if isinstance(e.get('date'), datetime):
-            e['date'] = e['date'].strftime('%Y-%m-%d')
+        e['date'] = e['date'].strftime('%Y-%m-%d') if e.get('date') else ''
 
     total_shared = sum(e['amount'] for e in shared_expenses)
 
-    all_settlements = list(get_collection(COLLECTION_SETTLEMENTS).find(
-        {'month': sel_month, 'year': sel_year}
-    ).sort('date', -1))
-    for s in all_settlements:
-        _serialize(s)
+    all_settlements = list(
+        Settlement.objects.filter(month=sel_month, year=sel_year).order_by('-date')
+    )
+    pending_settlements = [s for s in all_settlements if not s.settled]
+    settled_settlements = [s for s in all_settlements if s.settled]
+    total_pending       = sum(s.amount for s in pending_settlements)
 
-    pending_settlements = [s for s in all_settlements if not s.get('settled')]
-    settled_settlements = [s for s in all_settlements if s.get('settled')]
-    total_pending       = sum(s['amount'] for s in pending_settlements)
-
-    # Pending reimbursement requests (admin review)
-    pending_requests = list(get_collection(COLLECTION_REQUESTS).find(
-        {'status': 'pending'}
-    ).sort('created_at', -1))
+    pending_requests = list(
+        ReimbursementRequest.objects.filter(status='pending').order_by('-created_at').values()
+    )
     for r in pending_requests:
-        r['id'] = str(r.pop('_id'))
-        if isinstance(r.get('date'), datetime):
-            r['date'] = r['date'].strftime('%Y-%m-%d')
+        r['date'] = r['date'].strftime('%Y-%m-%d') if r.get('date') else ''
 
-    # Per-member summary
     member_summary = []
     for m in members:
-        name = m['name']
-        contributed         = pool['contrib_map'].get(name, 0)
-        member_pending_amt  = sum(s['amount'] for s in pending_settlements if s['paid_by'] == name)
+        contributed        = pool['contrib_map'].get(m.name, 0)
+        member_pending_amt = sum(
+            s.amount for s in pending_settlements if s.paid_by == m.name
+        )
         member_summary.append({
-            'name':         name,
-            'id':           m['id'],
-            'color':        m.get('color', '#6366f1'),
-            'role':         m.get('role', 'member'),
+            'name':         m.name,
+            'id':           m.id,
+            'color':        m.color,
+            'role':         m.role,
             'contributed':  contributed,
             'share_due':    pool['monthly_share'],
             'balance':      contributed - pool['monthly_share'],
             'pending_owed': member_pending_amt,
         })
 
-    all_years = {today.year, sel_year}
-    for col_name in [COLLECTION_CONTRIBUTIONS, COLLECTION_SHARED_EXP]:
-        for doc in get_collection(col_name).find({}, {'year': 1, '_id': 0}):
-            all_years.add(doc.get('year', today.year))
-    years = sorted(all_years, reverse=True)
+    years_contrib = set(Contribution.objects.values_list('year', flat=True))
+    years_shared  = set(SharedExpense.objects.values_list('date__year', flat=True))
+    years = sorted({today.year, sel_year} | years_contrib | years_shared, reverse=True)
 
     context = {
-        'user':               get_logged_in_user(request),
-        'members':            members,
-        'member_names':       member_names,
-        'member_summary':     member_summary,
-        'categories':         categories,
-        'sel_month':          sel_month,
-        'sel_year':           sel_year,
-        'sel_month_name':     MONTH_NAMES[sel_month],
-        'years':              years,
-        'months':             MONTH_CHOICES,
-        'pool':               pool,
-        'total_shared':       round(total_shared, 2),
-        'shared_expenses':    shared_expenses,
+        'user':                get_logged_in_user(request),
+        'members':             members,
+        'member_names':        member_names,
+        'member_summary':      member_summary,
+        'categories':          categories,
+        'sel_month':           sel_month,
+        'sel_year':            sel_year,
+        'sel_month_name':      MONTH_NAMES[sel_month],
+        'years':               years,
+        'months':              MONTH_CHOICES,
+        'pool':                pool,
+        'total_shared':        round(total_shared, 2),
+        'shared_expenses':     shared_expenses,
         'pending_settlements': pending_settlements,
         'settled_settlements': settled_settlements,
-        'total_pending':      round(total_pending, 2),
-        'pending_count':      len(pending_settlements),
-        'pending_requests':   pending_requests,
-        'request_count':      len(pending_requests),
+        'total_pending':       round(total_pending, 2),
+        'pending_count':       len(pending_settlements),
+        'pending_requests':    pending_requests,
+        'request_count':       len(pending_requests),
     }
     return render(request, 'expenses/flat_manager.html', context)
 
 
 # ── Contribution ───────────────────────────────────────────────
+
 @admin_required
 @require_POST
 def add_contribution(request):
@@ -538,32 +509,37 @@ def add_contribution(request):
         year   = int(request.POST.get('year'))
         member = request.POST.get('member', '').strip()
         amount = float(request.POST.get('amount', 0))
-        note   = request.POST.get('note', '')
-        doc    = contribution_schema(member, amount, month, year, note)
-        get_collection(COLLECTION_CONTRIBUTIONS).insert_one(doc)
+        note   = request.POST.get('note', '').strip()
+        if member and amount > 0:
+            Contribution.objects.create(
+                member=member, amount=round(amount, 2),
+                month=month, year=year, note=note,
+            )
     except Exception:
         pass
     return redirect(f'/flat/?month={request.POST.get("month")}&year={request.POST.get("year")}')
 
 
 # ── Shared expense ─────────────────────────────────────────────
+
 @admin_required
 @require_POST
 def add_shared_expense(request):
     try:
         amount    = float(request.POST.get('amount', 0))
-        exp_date  = datetime.strptime(request.POST.get('date'), '%Y-%m-%d')
+        exp_date  = datetime.strptime(request.POST.get('date'), '%Y-%m-%d').date()
         from_pool = request.POST.get('from_pool', 'true') == 'true'
-        doc = shared_expense_schema(
-            title     = request.POST.get('title', ''),
-            amount    = amount,
-            category  = request.POST.get('category', 'Other'),
-            date_obj  = exp_date,
-            paid_by   = request.POST.get('paid_by', 'Krishnaveni'),
-            from_pool = from_pool,
-            note      = request.POST.get('note', ''),
-        )
-        get_collection(COLLECTION_SHARED_EXP).insert_one(doc)
+        title     = request.POST.get('title', '').strip()
+        if title and amount > 0:
+            SharedExpense.objects.create(
+                title     = title,
+                amount    = round(amount, 2),
+                category  = request.POST.get('category', 'Other'),
+                date      = exp_date,
+                paid_by   = request.POST.get('paid_by', 'Krishnaveni'),
+                from_pool = from_pool,
+                note      = request.POST.get('note', '').strip(),
+            )
     except Exception:
         pass
     m = request.POST.get('month', date.today().month)
@@ -574,30 +550,35 @@ def add_shared_expense(request):
 @admin_required
 @require_POST
 def delete_shared_expense(request, expense_id):
-    doc = get_collection(COLLECTION_SHARED_EXP).find_one({'_id': ObjectId(expense_id)})
-    m   = doc.get('month', date.today().month) if doc else date.today().month
-    y   = doc.get('year',  date.today().year)  if doc else date.today().year
-    get_collection(COLLECTION_SHARED_EXP).delete_one({'_id': ObjectId(expense_id)})
+    try:
+        exp = SharedExpense.objects.get(pk=expense_id)
+        m, y = exp.date.month, exp.date.year
+        exp.delete()
+    except SharedExpense.DoesNotExist:
+        m, y = date.today().month, date.today().year
     return redirect(f'/flat/?month={m}&year={y}')
 
 
 # ── Settlements ────────────────────────────────────────────────
+
 @admin_required
 @require_POST
 def add_settlement(request):
     try:
         amount   = float(request.POST.get('amount', 0))
-        exp_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d')
-        doc      = settlement_schema(
-            paid_by     = request.POST.get('paid_by', ''),
-            amount      = amount,
-            description = request.POST.get('description', ''),
-            date_obj    = exp_date,
-            note        = request.POST.get('note', ''),
-        )
-        doc['month'] = exp_date.month
-        doc['year']  = exp_date.year
-        get_collection(COLLECTION_SETTLEMENTS).insert_one(doc)
+        exp_date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d').date()
+        paid_by  = request.POST.get('paid_by', '').strip()
+        desc     = request.POST.get('description', '').strip()
+        if paid_by and amount > 0:
+            Settlement.objects.create(
+                paid_by     = paid_by,
+                amount      = round(amount, 2),
+                description = desc,
+                date        = exp_date,
+                month       = exp_date.month,
+                year        = exp_date.year,
+                note        = request.POST.get('note', '').strip(),
+            )
     except Exception:
         pass
     m = request.POST.get('month', date.today().month)
@@ -608,9 +589,8 @@ def add_settlement(request):
 @admin_required
 @require_POST
 def mark_settled(request, settlement_id):
-    get_collection(COLLECTION_SETTLEMENTS).update_one(
-        {'_id': ObjectId(settlement_id)},
-        {'$set': {'settled': True, 'settled_on': datetime.utcnow()}}
+    Settlement.objects.filter(pk=settlement_id).update(
+        settled=True, settled_on=timezone.now()
     )
     m = request.POST.get('month', date.today().month)
     y = request.POST.get('year',  date.today().year)
@@ -620,30 +600,31 @@ def mark_settled(request, settlement_id):
 @admin_required
 @require_POST
 def delete_settlement(request, settlement_id):
-    doc = get_collection(COLLECTION_SETTLEMENTS).find_one({'_id': ObjectId(settlement_id)})
-    m   = doc.get('month', date.today().month) if doc else date.today().month
-    y   = doc.get('year',  date.today().year)  if doc else date.today().year
-    get_collection(COLLECTION_SETTLEMENTS).delete_one({'_id': ObjectId(settlement_id)})
+    try:
+        s = Settlement.objects.get(pk=settlement_id)
+        m, y = s.month, s.year
+        s.delete()
+    except Settlement.DoesNotExist:
+        m, y = date.today().month, date.today().year
     return redirect(f'/flat/?month={m}&year={y}')
 
 
 # ── Member & settings management ──────────────────────────────
+
 @admin_required
 @require_POST
 def update_member(request, member_id):
-    new_name = request.POST.get('name', '').strip()
-    new_pass = request.POST.get('password', '').strip()
-    upd = {}
-    if new_name:
-        upd['name'] = new_name
-    if new_pass:
-        from .auth import hash_password
-        upd['password'] = hash_password(new_pass)
-    if upd:
-        upd['updated_at'] = datetime.utcnow()
-        get_collection(COLLECTION_MEMBERS).update_one(
-            {'_id': ObjectId(member_id)}, {'$set': upd}
-        )
+    try:
+        member   = Member.objects.get(pk=member_id)
+        new_name = request.POST.get('name', '').strip()
+        new_pass = request.POST.get('password', '').strip()
+        if new_name:
+            member.name = new_name
+        if new_pass:
+            member.password = Member.hash_password(new_pass)
+        member.save()
+    except Member.DoesNotExist:
+        pass
     return redirect('flat_manager')
 
 
@@ -651,29 +632,32 @@ def update_member(request, member_id):
 @require_POST
 def update_monthly_share(request):
     try:
-        amount = float(request.POST.get('monthly_share', 8000))
-        get_collection(COLLECTION_SETTINGS).update_one(
-            {'key': 'app_settings'},
-            {'$set': {'monthly_share': amount}}
-        )
+        amount   = float(request.POST.get('monthly_share', 8000))
+        settings = AppSettings.objects.first()
+        if settings:
+            settings.monthly_share = amount
+            settings.save()
+        else:
+            AppSettings.objects.create(monthly_share=amount)
     except Exception:
         pass
     return redirect('flat_manager')
 
 
 # ── Change own password ────────────────────────────────────────
+
 @login_required
 @require_POST
 def change_password(request):
     user     = get_logged_in_user(request)
     old_pass = request.POST.get('old_password', '')
     new_pass = request.POST.get('new_password', '').strip()
-    from .auth import hash_password, authenticate
-    member   = get_collection(COLLECTION_MEMBERS).find_one({'name': user['name']})
-    if member and member.get('password') == hash_password(old_pass) and new_pass:
-        get_collection(COLLECTION_MEMBERS).update_one(
-            {'name': user['name']},
-            {'$set': {'password': hash_password(new_pass)}}
-        )
+    try:
+        member = Member.objects.get(name=user['name'])
+        if member.password == Member.hash_password(old_pass) and new_pass:
+            member.password = Member.hash_password(new_pass)
+            member.save()
+    except Member.DoesNotExist:
+        pass
     role = user['role']
     return redirect('dashboard' if role == 'admin' else 'member_dashboard')
