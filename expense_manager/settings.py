@@ -1,13 +1,17 @@
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env only if it exists (local dev) — not required on PythonAnywhere
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fallback-key-change-in-production')
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-flat-expense-manager-secret-key-2024')
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
