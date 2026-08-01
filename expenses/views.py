@@ -630,6 +630,41 @@ def update_member(request, member_id):
 
 @admin_required
 @require_POST
+def add_member(request):
+    name     = request.POST.get('name', '').strip()
+    username = request.POST.get('username', '').strip().lower()
+    password = request.POST.get('password', '').strip()
+    if name and username and password:
+        colors = ['#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#8b5cf6', '#ef4444']
+        existing_count = Member.objects.count()
+        color = colors[existing_count % len(colors)]
+        Member.objects.get_or_create(
+            username=username,
+            defaults={
+                'name':     name,
+                'role':     'member',
+                'color':    color,
+                'password': Member.hash_password(password),
+                'active':   True,
+            }
+        )
+    return redirect('flat_manager')
+
+
+@admin_required
+@require_POST
+def delete_member(request, member_id):
+    try:
+        member = Member.objects.get(pk=member_id)
+        if member.role != 'admin':
+            member.delete()
+    except Member.DoesNotExist:
+        pass
+    return redirect('flat_manager')
+
+
+@admin_required
+@require_POST
 def update_monthly_share(request):
     try:
         amount   = float(request.POST.get('monthly_share', 8000))

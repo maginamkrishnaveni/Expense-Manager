@@ -30,6 +30,8 @@ urlpatterns = [
     path('flat/request/review/<str:request_id>/', views.review_request,   name='review_request'),
 
     # ── Settings ──────────────────────────────────────────────
-    path('flat/member/update/<str:member_id>/', views.update_member,       name='update_member'),
+    path('flat/member/update/<int:member_id>/', views.update_member,  name='update_member'),
+    path('flat/member/add/',                   views.add_member,      name='add_member'),
+    path('flat/member/delete/<int:member_id>/', views.delete_member,  name='delete_member'),
     path('flat/share/update/',                  views.update_monthly_share, name='update_monthly_share'),
 ]
