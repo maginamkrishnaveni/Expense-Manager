@@ -52,13 +52,27 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'expense_manager.wsgi.application'
 
-# SQLite database — works everywhere, no setup needed
+# Database — SQLite by default (works everywhere, no setup needed).
+# To use PostgreSQL (recommended in production / on PaaS where the
+# filesystem is ephemeral), set the DATABASE_URL env var, e.g.
+#   postgres://user:pass@host:5432/dbname
+# dj_database_url is optional: if the package isn't installed we simply
+# keep SQLite, so local dev still works without reinstalling deps.
+try:
+    import dj_database_url
+except ImportError:
+    dj_database_url = None
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+_db_url = os.getenv('DATABASE_URL')
+if _db_url and dj_database_url is not None:
+    DATABASES['default'] = dj_database_url.parse(_db_url, conn_max_age=600)
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kolkata'
