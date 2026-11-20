@@ -1,0 +1,200 @@
+{% extends "expenses/base.html" %}
+{% block title %}AI Assistant — ExpenseIQ{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+
+    <!-- Header -->
+    <div class="d-flex align-items-center gap-3 mb-4">
+      <div class="kpi-icon bg-primary-soft" style="width:52px;height:52px;font-size:1.6rem;">
+        <i class="bi bi-robot"></i>
+      </div>
+      <div>
+        <h4 class="mb-0 fw-bold">AI Expense Assistant</h4>
+        <p class="text-muted mb-0 small">Powered by LangGraph + ChromaDB RAG — Ask anything about your spending</p>
+      </div>
+    </div>
+
+    <!-- Suggested questions -->
+    <div class="card-box mb-3">
+      <p class="section-title mb-2"><i class="bi bi-lightbulb me-2 text-warning"></i>Try asking:</p>
+      <div class="d-flex flex-wrap gap-2" id="suggestions">
+        <button class="btn btn-sm btn-outline-secondary suggestion-btn">How much did I spend this month?</button>
+        <button class="btn btn-sm btn-outline-secondary suggestion-btn">What's my top spending category?</button>
+        <button class="btn btn-sm btn-outline-secondary suggestion-btn">Give me 3 tips to reduce my expenses</button>
+        <button class="btn btn-sm btn-outline-secondary suggestion-btn">How does my spending compare month over month?</button>
+        <button class="btn btn-sm btn-outline-secondary suggestion-btn">Am I spending too much on food?</button>
+        <button class="btn btn-sm btn-outline-secondary suggestion-btn">What were my top 5 most expensive items?</button>
+      </div>
+    </div>
+
+    <!-- Chat window -->
+    <div class="card-box mb-3" style="min-height:400px;">
+      <div id="chatMessages" style="height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 0;">
+
+        <!-- Welcome message -->
+        <div class="d-flex gap-2 align-items-start">
+          <div style="width:34px;height:34px;border-radius:50%;background:#ede9fe;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <i class="bi bi-robot text-accent"></i>
+          </div>
+          <div class="chat-bubble chat-ai">
+            <strong>ExpenseIQ Assistant</strong><br>
+            Hi {{ user.name }}! 👋 I'm your AI financial assistant. I have access to all your expense data and can help you understand your spending patterns, find savings opportunities, and answer any financial questions.<br><br>
+            What would you like to know?
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="card-box">
+      <form id="chatForm" class="d-flex gap-2">
+        {% csrf_token %}
+        <input
+          type="text"
+          id="questionInput"
+          class="form-control"
+          placeholder="Ask about your expenses... e.g. 'How much did I spend on food in August?'"
+          autocomplete="off"
+        />
+        <button type="submit" class="btn btn-accent px-4" id="sendBtn">
+          <i class="bi bi-send-fill"></i>
+        </button>
+      </form>
+      <p class="text-muted small mt-2 mb-0">
+        <i class="bi bi-info-circle me-1"></i>
+        Your data is retrieved via semantic search (ChromaDB) and processed locally. Requires OpenAI API key in .env.
+      </p>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<style>
+.chat-bubble {
+  border-radius: 14px;
+  padding: 10px 14px;
+  max-width: 90%;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+.chat-user {
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  margin-left: auto;
+}
+.chat-ai {
+  background: #f1f5f9;
+  color: var(--text);
+  border-bottom-left-radius: 4px;
+}
+.chat-thinking {
+  background: #f1f5f9;
+  color: var(--muted);
+  font-style: italic;
+  border-bottom-left-radius: 4px;
+}
+.user-row { flex-direction: row-reverse; }
+</style>
+
+<script>
+const chatMessages = document.getElementById('chatMessages');
+const questionInput = document.getElementById('questionInput');
+const chatForm = document.getElementById('chatForm');
+const sendBtn = document.getElementById('sendBtn');
+const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+function scrollToBottom() {
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function appendMessage(text, role) {
+  const row = document.createElement('div');
+  row.className = 'd-flex gap-2 align-items-start' + (role === 'user' ? ' user-row' : '');
+
+  const avatar = document.createElement('div');
+  avatar.style.cssText = 'width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;';
+
+  if (role === 'user') {
+    avatar.style.background = '{{ user.color|default:"#6366f1" }}';
+    avatar.style.color = '#fff';
+    avatar.innerHTML = '<span style="font-weight:700;font-size:.9rem">{{ user.name|slice:":1" }}</span>';
+  } else {
+    avatar.style.background = '#ede9fe';
+    avatar.innerHTML = '<i class="bi bi-robot text-accent"></i>';
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble ' + (role === 'user' ? 'chat-user' : (role === 'thinking' ? 'chat-thinking' : 'chat-ai'));
+
+  // Convert markdown-style **bold** and newlines to HTML
+  const formatted = text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+  bubble.innerHTML = formatted;
+
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+  chatMessages.appendChild(row);
+  scrollToBottom();
+  return bubble;
+}
+
+chatForm.addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const question = questionInput.value.trim();
+  if (!question) return;
+
+  appendMessage(question, 'user');
+  questionInput.value = '';
+  sendBtn.disabled = true;
+
+  const thinkingBubble = appendMessage('Searching your expenses and generating answer...', 'thinking');
+
+  try {
+    const resp = await fetch('/ai/ask/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrfToken,
+      },
+      body: JSON.stringify({ question }),
+    });
+    const data = await resp.json();
+
+    // Replace thinking bubble with actual answer
+    thinkingBubble.className = 'chat-bubble chat-ai';
+    const formatted = (data.answer || 'No response received.')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+    thinkingBubble.innerHTML = formatted;
+  } catch (err) {
+    thinkingBubble.className = 'chat-bubble chat-ai';
+    thinkingBubble.innerHTML = '⚠️ Network error. Please try again.';
+  }
+
+  sendBtn.disabled = false;
+  scrollToBottom();
+});
+
+// Suggestion buttons
+document.querySelectorAll('.suggestion-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    questionInput.value = this.textContent;
+    questionInput.focus();
+  });
+});
+
+// Enter key submits
+questionInput.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    chatForm.dispatchEvent(new Event('submit'));
+  }
+});
+</script>
+{% endblock %}

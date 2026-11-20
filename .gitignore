@@ -1,17 +1,26 @@
 # Virtual environment
 venv/
 env/
+.venv/
+
+# Secrets — never commit
 .env
+.env.*
 
 # Python cache
 __pycache__/
 *.py[cod]
 *.pyo
+*.egg-info/
+.pytest_cache/
 
 # Django
 *.sqlite3
 staticfiles/
 db.sqlite3
+
+# AI vector store (generated at runtime)
+chroma_db/
 
 # OS files
 .DS_Store
@@ -20,3 +29,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Kiro planning artifacts (not part of the app)
+projects/

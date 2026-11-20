@@ -1,0 +1,36 @@
+# ── Keep secrets, dev data, caches, and non-app files out of the image ─
+
+# Git metadata
+.git
+.gitignore
+.github
+
+# Editors / IDE
+.vscode
+.idea
+
+# Python caches & bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Secrets — set these as environment variables in Koyeb, never in the image
+.env
+.env.*
+.env.local
+
+# Local databases & generated stores (regenerated at build/runtime)
+*.sqlite3
+db.sqlite3
+staticfiles/
+chroma_db/
+
+# Kiro planning artifacts (not part of the Django app)
+projects/

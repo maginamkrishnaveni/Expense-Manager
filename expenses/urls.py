@@ -5,6 +5,7 @@ urlpatterns = [
     # ── Auth ──────────────────────────────────────────────────
     path('login/',                              views.login_view,          name='login'),
     path('logout/',                             views.logout_view,         name='logout'),
+    path('register/',                           views.register_view,       name='register'),
     path('change-password/',                    views.change_password,     name='change_password'),
 
     # ── Admin: personal expenses ──────────────────────────────
@@ -14,6 +15,11 @@ urlpatterns = [
     path('edit/<str:expense_id>/',              views.edit_expense,        name='edit_expense'),
     path('delete/<str:expense_id>/',            views.delete_expense,      name='delete_expense'),
     path('analytics/',                          views.analytics,           name='analytics'),
+
+    # ── AI Agent ──────────────────────────────────────────────
+    path('ai/',                                 views.ai_chat,             name='ai_chat'),
+    path('ai/ask/',                             views.ai_chat_api,         name='ai_chat_api'),
+    path('ai/insights/',                        views.ai_insights_api,     name='ai_insights_api'),
 
     # ── Member dashboard ──────────────────────────────────────
     path('member/',                             views.member_dashboard,    name='member_dashboard'),

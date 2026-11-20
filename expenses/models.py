@@ -1,10 +1,23 @@
 """
 Django ORM Models — SQLite backend
-Replaces all MongoDB pymongo collections with proper Django models.
+Multi-flat support: each flat has an owner (admin) and members.
+All expenses, contributions, etc. are scoped per flat.
 """
 
 import hashlib
 from django.db import models
+
+
+# ══════════════════════════════════════════════════════════════
+#  FLAT  (a group / household)
+# ══════════════════════════════════════════════════════════════
+
+class Flat(models.Model):
+    name       = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
 
 
 # ══════════════════════════════════════════════════════════════
@@ -14,7 +27,9 @@ from django.db import models
 class Member(models.Model):
     ROLE_CHOICES = [('admin', 'Admin'), ('member', 'Member')]
 
-    name       = models.CharField(max_length=100, unique=True)
+    flat       = models.ForeignKey(Flat, on_delete=models.CASCADE,
+                                   related_name='members', null=True, blank=True)
+    name       = models.CharField(max_length=100)
     username   = models.CharField(max_length=100, unique=True)
     password   = models.CharField(max_length=256)   # sha256 hex
     role       = models.CharField(max_length=20, choices=ROLE_CHOICES, default='member')
@@ -52,28 +67,27 @@ class Category(models.Model):
 
 
 # ══════════════════════════════════════════════════════════════
-#  APP SETTINGS  (single-row config table)
+#  FLAT SETTINGS  (per-flat config)
 # ══════════════════════════════════════════════════════════════
 
-class AppSettings(models.Model):
+class FlatSettings(models.Model):
+    flat          = models.OneToOneField(Flat, on_delete=models.CASCADE,
+                                         related_name='settings')
     currency      = models.CharField(max_length=5,  default='₹')
     currency_code = models.CharField(max_length=10, default='INR')
-    app_name      = models.CharField(max_length=100, default='ExpenseIQ')
-    monthly_share = models.FloatField(default=8000)
-
-    class Meta:
-        verbose_name = 'App Settings'
-        verbose_name_plural = 'App Settings'
+    monthly_share = models.FloatField(default=5000)
 
     def __str__(self):
-        return 'App Settings'
+        return f'Settings for {self.flat.name}'
 
 
 # ══════════════════════════════════════════════════════════════
-#  PERSONAL EXPENSE  (admin's own expenses)
+#  PERSONAL EXPENSE  (admin's own expenses, per flat)
 # ══════════════════════════════════════════════════════════════
 
 class Expense(models.Model):
+    flat       = models.ForeignKey(Flat, on_delete=models.CASCADE,
+                                   related_name='expenses', null=True, blank=True)
     title      = models.CharField(max_length=200)
     amount     = models.FloatField()
     category   = models.CharField(max_length=100, default='Other')
@@ -94,6 +108,8 @@ class Expense(models.Model):
 # ══════════════════════════════════════════════════════════════
 
 class Contribution(models.Model):
+    flat       = models.ForeignKey(Flat, on_delete=models.CASCADE,
+                                   related_name='contributions', null=True, blank=True)
     member     = models.CharField(max_length=100)
     amount     = models.FloatField()
     month      = models.IntegerField()
@@ -114,12 +130,14 @@ class Contribution(models.Model):
 # ══════════════════════════════════════════════════════════════
 
 class SharedExpense(models.Model):
+    flat       = models.ForeignKey(Flat, on_delete=models.CASCADE,
+                                   related_name='shared_expenses', null=True, blank=True)
     title      = models.CharField(max_length=200)
     amount     = models.FloatField()
     category   = models.CharField(max_length=100, default='Other')
     date       = models.DateField()
     paid_by    = models.CharField(max_length=100)
-    from_pool  = models.BooleanField(default=True)   # False = paid from own pocket
+    from_pool  = models.BooleanField(default=True)
     note       = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -128,14 +146,16 @@ class SharedExpense(models.Model):
         ordering = ['-date', '-created_at']
 
     def __str__(self):
-        return f'{self.title} — ₹{self.amount} (paid by {self.paid_by})'
+        return f'{self.title} — ₹{self.amount}'
 
 
 # ══════════════════════════════════════════════════════════════
-#  SETTLEMENT  (flatmate spent own money, admin owes them)
+#  SETTLEMENT
 # ══════════════════════════════════════════════════════════════
 
 class Settlement(models.Model):
+    flat        = models.ForeignKey(Flat, on_delete=models.CASCADE,
+                                    related_name='settlements', null=True, blank=True)
     paid_by     = models.CharField(max_length=100)
     amount      = models.FloatField()
     description = models.CharField(max_length=200)
@@ -151,11 +171,11 @@ class Settlement(models.Model):
         ordering = ['-date', '-created_at']
 
     def __str__(self):
-        return f'{self.paid_by} — ₹{self.amount} ({"settled" if self.settled else "pending"})'
+        return f'{self.paid_by} — ₹{self.amount}'
 
 
 # ══════════════════════════════════════════════════════════════
-#  REIMBURSEMENT REQUEST  (flatmate requests money from admin)
+#  REIMBURSEMENT REQUEST
 # ══════════════════════════════════════════════════════════════
 
 class ReimbursementRequest(models.Model):
@@ -165,6 +185,8 @@ class ReimbursementRequest(models.Model):
         ('rejected', 'Rejected'),
     ]
 
+    flat         = models.ForeignKey(Flat, on_delete=models.CASCADE,
+                                     related_name='requests', null=True, blank=True)
     requested_by = models.CharField(max_length=100)
     amount       = models.FloatField()
     description  = models.CharField(max_length=200)

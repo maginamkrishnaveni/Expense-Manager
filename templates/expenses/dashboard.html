@@ -43,6 +43,9 @@
   </div>
 </div>
 
+<!-- AI Insights Widget (auto-loads if AI is configured) -->
+<div id="aiInsightsRow" class="row g-3 mb-4" style="display:none!important"></div>
+
 <!-- Charts Row -->
 <div class="row g-3 mb-4">
   <div class="col-md-7">
@@ -199,5 +202,30 @@ new Chart(document.getElementById('categoryChart'), {
     }
   }
 });
+
+// Load AI insights asynchronously
+fetch('/ai/insights/')
+  .then(r => r.json())
+  .then(data => {
+    if (data.insights && data.insights.length > 0) {
+      const row = document.getElementById('aiInsightsRow');
+      row.style.removeProperty('display');
+      data.insights.forEach(ins => {
+        const col = document.createElement('div');
+        col.className = 'col-md-4';
+        col.innerHTML = `
+          <div class="kpi-card" style="border-left:3px solid var(--accent)">
+            <div class="kpi-icon bg-primary-soft"><i class="bi ${ins.icon || 'bi-stars'}"></i></div>
+            <div>
+              <div class="kpi-label" style="color:var(--accent)"><i class="bi bi-stars me-1"></i>AI Insight</div>
+              <div class="kpi-value-sm">${ins.title}</div>
+              <div class="text-muted" style="font-size:.78rem;margin-top:2px">${ins.text}</div>
+            </div>
+          </div>`;
+        row.appendChild(col);
+      });
+    }
+  })
+  .catch(() => {});
 </script>
 {% endblock %}

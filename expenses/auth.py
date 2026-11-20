@@ -1,5 +1,5 @@
 """
-Session-based auth helpers using Django ORM (SQLite).
+Session-based auth helpers — flat-aware.
 """
 
 import hashlib
@@ -25,16 +25,25 @@ def authenticate(username, password):
 
 def get_logged_in_user(request):
     """Return user dict from session, or None."""
-    user_id = request.session.get('user_id')
-    name    = request.session.get('user_name')
-    role    = request.session.get('user_role')
+    user_id  = request.session.get('user_id')
+    name     = request.session.get('user_name')
+    role     = request.session.get('user_role')
+    flat_id  = request.session.get('flat_id')
+    flat_name = request.session.get('flat_name')
+    color    = request.session.get('user_color', '#6366f1')
     if user_id and name and role:
-        return {'id': user_id, 'name': name, 'role': role}
+        return {
+            'id':        user_id,
+            'name':      name,
+            'role':      role,
+            'flat_id':   flat_id,
+            'flat_name': flat_name,
+            'color':     color,
+        }
     return None
 
 
 def login_required(view_func):
-    """Decorator — redirects to login if not authenticated."""
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
         if not get_logged_in_user(request):
@@ -44,7 +53,6 @@ def login_required(view_func):
 
 
 def admin_required(view_func):
-    """Decorator — redirects to member dashboard if not admin."""
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
         user = get_logged_in_user(request)
